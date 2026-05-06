@@ -25,6 +25,24 @@ function time_later(end) {
   return `${value} ${unit}`;
 }
 
+async function fetchPintiaProblemSets(cookie, filter) {
+  return axios.get("https://pintia.cn/api/problem-sets", {
+    params: {
+      filter,
+      limit: 100,
+      order_by: "END_AT",
+      asc: true,
+    },
+    headers: {
+      Accept: "application/json;charset=UTF-8",
+      "Accept-Language": "zh-CN",
+      Cookie: cookie,
+      Referer: "https://pintia.cn/problem-sets/dashboard",
+    },
+    validateStatus: () => true,
+  });
+}
+
 // courses.zju.edu.cn
 
 async function getCoursesZjuTodos() {
@@ -133,91 +151,11 @@ async function getCoursesZjuTodos() {
 // pintia.cn
 
 async function getPintiaTodos() {
-  if (!process.env.PINTIA_EMAIL || !process.env.PINTIA_PASSWORD) {
-    console.error(
-      "[pintia] 未配置 PINTIA_EMAIL / PINTIA_PASSWORD，跳过 pintia 作业获取。"
-    );
+  const cookie = process.env.PINTIA_COOKIE?.trim();
+  if (!cookie) {
+    console.error("[pintia] 未配置 PINTIA_COOKIE，跳过 pintia 作业获取。");
     return [];
   }
-
-  // 用 axios cookieJar 管理 session，手动跟随重定向
-  const cookieJar = {};
-  const parseCookies = (setCookieHeaders) => {
-    if (!setCookieHeaders) return;
-    const headers = Array.isArray(setCookieHeaders)
-      ? setCookieHeaders
-      : [setCookieHeaders];
-    for (const header of headers) {
-      const [pair] = header.split(";");
-      const [name, value] = pair.split("=");
-      cookieJar[name.trim()] = value ? value.trim() : "";
-    }
-  };
-  const cookieString = () =>
-    Object.entries(cookieJar)
-      .map(([k, v]) => `${k}=${v}`)
-      .join("; ");
-
-  const passportHeaders = {
-    "User-Agent":
-      "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/143.0.0.0 Safari/537.36",
-    Accept: "application/json;charset=UTF-8",
-    "Content-Type": "application/json;charset=UTF-8",
-    "Accept-Language": "zh-CN",
-    "X-Marshmallow": "",
-    Origin: "https://pintia.cn",
-    Referer: "https://pintia.cn/",
-  };
-
-  // 1. 登录 passport.pintia.cn
-  const loginResp = await axios.post(
-    "https://passport.pintia.cn/api/users/sessions",
-    {
-      email: process.env.PINTIA_EMAIL,
-      password: process.env.PINTIA_PASSWORD,
-      rememberMe: true,
-    },
-    {
-      headers: { ...passportHeaders, Cookie: cookieString() },
-      validateStatus: () => true,
-    }
-  );
-
-  if (loginResp.status !== 200) {
-    throw new Error(
-      `[pintia] 登录失败 (${loginResp.status}): ${JSON.stringify(loginResp.data)}`
-    );
-  }
-  parseCookies(loginResp.headers["set-cookie"]);
-
-  // 2. GET dal-not-redir（获取跨域登录重定向 URL）
-  const dalResp = await axios.get(
-    "https://passport.pintia.cn/api/login/dal-not-redir?redir=%2F",
-    {
-      headers: { ...passportHeaders, Cookie: cookieString() },
-      validateStatus: () => true,
-      maxRedirects: 0,
-    }
-  );
-  parseCookies(dalResp.headers["set-cookie"]);
-
-  const redirectUrl =
-    dalResp.data?.location || dalResp.headers?.location;
-  if (!redirectUrl) {
-    throw new Error("[pintia] 未获取到重定向 URL，登录流程异常");
-  }
-
-  // 3. 跟随重定向到 patest.cn（设置 JSESSIONID）
-  const islandResp = await axios.get(redirectUrl, {
-    headers: {
-      ...passportHeaders,
-      Cookie: cookieString(),
-      Origin: "https://pintia.cn",
-    },
-    validateStatus: () => true,
-    maxRedirects: 5,
-  });
-  parseCookies(islandResp.headers["set-cookie"]);
 
   // 4. 获取近期未截止的 problem sets（endAtAfter = 昨天 UTC 0点）
   const yesterday = new Date();
@@ -225,29 +163,14 @@ async function getPintiaTodos() {
   yesterday.setUTCHours(0, 0, 0, 0);
   const filter = JSON.stringify({ endAtAfter: yesterday.toISOString() });
 
-  const psResp = await axios.get("https://pintia.cn/api/problem-sets", {
-    params: {
-      filter,
-      limit: 100,
-      order_by: "END_AT",
-      asc: true,
-    },
-    headers: {
-      ...passportHeaders,
-      Cookie: cookieString(),
-      Origin: undefined,
-      Referer: "https://pintia.cn/problem-sets/dashboard",
-    },
-    validateStatus: () => true,
-  });
-
+  const psResp = await fetchPintiaProblemSets(cookie, filter);
   if (psResp.status !== 200) {
     throw new Error(
       `[pintia] 获取作业列表失败 (${psResp.status}): ${JSON.stringify(psResp.data)}`
     );
   }
 
-  const { problemSets = [] } = psResp.data;
+  const { problemSets = [] } = psResp.data || {};
   const now = new Date();
 
   return problemSets
