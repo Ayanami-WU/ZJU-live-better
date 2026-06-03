@@ -1,0 +1,15 @@
+services:
+  autosign:
+    build:
+      context: .
+    image: ${LIVE_BETTER_IMAGE:-zju-live-better:local}
+    init: true
+    restart: unless-stopped
+    env_file:
+      - ${LIVE_BETTER_ENV_FILE:-./deploy/env/autosign.env}
+    environment:
+      TZ: ${TZ:-Asia/Shanghai}
+      NODE_ENV: production
+      CLASSROOM_DOWNLOAD_PATH: ${CLASSROOM_DOWNLOAD_PATH:-/data/downloads}
+    volumes:
+      - ./data:/data
