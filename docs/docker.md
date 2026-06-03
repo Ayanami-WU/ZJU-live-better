@@ -64,7 +64,7 @@ docker compose run --rm autosign --dry-run
 如果某个环境需要长期带参数，在对应 env 文件里配置：
 
 ```env
-LIVE_BETTER_ARGS=--raderAt AUTO
+LIVE_BETTER_ARGS=--radarAt AUTO
 ```
 
 多账号 JSON 可以放到 `data/accounts.json`，然后在 env 文件里配置：

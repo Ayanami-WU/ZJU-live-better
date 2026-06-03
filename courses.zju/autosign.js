@@ -4,15 +4,18 @@ import fs from "fs/promises";
 import path from "path";
 import "../shared/config.js";
 import dingTalk from "../shared/dingtalk-webhook.js";
+import Decimal from "decimal.js";
+
+Decimal.set({ precision: 100 });
 
 const CONFIG = {
-  raderAt: "ZJGD1",
-  coldDownTime: 2500,
+  radarAt: "ZJGD1",
+  coldDownTime: 4000,
 };
 
-const AUTO_RADER = "AUTO";
+const AUTO_RADAR = "AUTO";
 
-const RaderInfo = {
+const RadarInfo = {
   ZJGD1: [120.089136, 30.302331], // 东一教学楼
   ZJGX1: [120.085042, 30.30173], // 西教学楼
   ZJGB1: [120.077135, 30.305142], // 段永平教学楼
@@ -45,10 +48,10 @@ const LOCATION_LABELS = {
 
 const LOCATION_CHOICES = [
   {
-    name: `${AUTO_RADER} - ${LOCATION_LABELS[AUTO_RADER]}（推荐）`,
-    value: AUTO_RADER,
+    name: `${AUTO_RADAR} - ${LOCATION_LABELS[AUTO_RADAR]}（推荐）`,
+    value: AUTO_RADAR,
   },
-  ...Object.keys(RaderInfo).map((code) => ({
+  ...Object.keys(RadarInfo).map((code) => ({
     name: `${code} - ${LOCATION_LABELS[code] ?? code}`,
     value: code,
   })),
@@ -79,7 +82,7 @@ function parseCliArgs(argv) {
     username: "",
     password: "",
     label: "",
-    raderAt: "",
+    radarAt: "",
     accountsFile: "",
     envFile: "",
   };
@@ -117,10 +120,12 @@ function parseCliArgs(argv) {
       case "--label":
         parsed.label = nextValue();
         break;
+      case "--radarAt":
       case "--raderAt":
+      case "--radar-at":
       case "--rader-at":
       case "--location":
-        parsed.raderAt = nextValue();
+        parsed.radarAt = nextValue();
         break;
       case "--accounts-file":
       case "--users-file":
@@ -140,7 +145,7 @@ function parseCliArgs(argv) {
 function printHelp() {
   console.log(`Usage:
   node courses.zju/autosign.js
-  node courses.zju/autosign.js --username 12345678 --password your_password --raderAt AUTO
+  node courses.zju/autosign.js --username 12345678 --password your_password --radarAt AUTO
   node courses.zju/autosign.js --prompt
   node courses.zju/autosign.js --accounts-file ./autosign-users.json
 
@@ -148,7 +153,8 @@ Options:
   --username, -u       Override ZJU_USERNAME for a single user
   --password, -p       Override ZJU_PASSWORD for a single user
   --label              Optional display name used in logs
-  --raderAt            Preferred location code, or AUTO to scan all known points
+  --radarAt            Preferred location code, or AUTO to scan all known points
+  --raderAt            Backward-compatible alias for --radarAt
   --prompt             Manually enter one or more accounts in the terminal
   --accounts-file      Read multiple users from a JSON file
   --dry-run            Print resolved account config and exit
@@ -161,20 +167,21 @@ Accounts file example:
     "label": "小明",
     "username": "2020123456",
     "password": "password1",
-    "raderAt": "AUTO"
+    "radarAt": "AUTO"
   },
   {
     "label": "室友",
     "username": "2021123456",
     "password": "password2",
-    "raderAt": "ZJGD1"
+    "radarAt": "ZJGD1"
   }
 ]
 
 Tips:
   1. --password 会留在 shell 历史里，平时更建议用 --prompt。
-  2. 不传参数时，脚本仍然会回退到 .env 里的 ZJU_USERNAME 和 ZJU_PASSWORD。
-  3. raderAt 现在是可选优化项；用 AUTO 时会自动轮询全部已知点位。
+  2. 不传参数时，脚本仍然会回退到 env 里的 ZJU_USERNAME 和 ZJU_PASSWORD。
+  3. radarAt 现在是可选优化项；用 AUTO 时会自动轮询全部已知点位。
+  4. 旧配置里的 raderAt / rader_at 仍然兼容。
 `);
 }
 
@@ -193,18 +200,20 @@ function normalizeAccount(rawAccount, defaults = {}) {
   const usernameValue = rawAccount.username ?? rawAccount.ZJU_USERNAME ?? defaults.username ?? "";
   const passwordValue = rawAccount.password ?? rawAccount.ZJU_PASSWORD ?? defaults.password ?? "";
   const labelValue = rawAccount.label ?? rawAccount.name ?? defaults.label ?? "";
-  const raderAtValue =
+  const radarAtValue =
+    rawAccount.radarAt ??
     rawAccount.raderAt ??
+    rawAccount.radar_at ??
     rawAccount.rader_at ??
     rawAccount.location ??
-    defaults.raderAt ??
-    CONFIG.raderAt;
+    defaults.radarAt ??
+    CONFIG.radarAt;
 
   const username = String(usernameValue).trim();
   const password = String(passwordValue);
   const label = String(labelValue).trim();
-  const normalizedRaderAtInput = String(raderAtValue).trim().toUpperCase();
-  const raderAt = normalizedRaderAtInput || AUTO_RADER;
+  const normalizedRadarAtInput = String(radarAtValue).trim().toUpperCase();
+  const radarAt = normalizedRadarAtInput || AUTO_RADAR;
 
   if (!username) {
     throw new Error("Missing username for one of the autosign accounts.");
@@ -214,9 +223,9 @@ function normalizeAccount(rawAccount, defaults = {}) {
     throw new Error(`Missing password for autosign account ${username}.`);
   }
 
-  if (raderAt !== AUTO_RADER && !RaderInfo[raderAt]) {
+  if (radarAt !== AUTO_RADAR && !RadarInfo[radarAt]) {
     throw new Error(
-      `Unknown raderAt "${raderAt}" for autosign account ${username}. Available values: ${AUTO_RADER}, ${Object.keys(RaderInfo).join(", ")}`
+      `Unknown radarAt "${radarAt}" for autosign account ${username}. Available values: ${AUTO_RADAR}, ${Object.keys(RadarInfo).join(", ")}`
     );
   }
 
@@ -224,7 +233,7 @@ function normalizeAccount(rawAccount, defaults = {}) {
     username,
     password,
     label: label || username,
-    raderAt,
+    radarAt,
   };
 }
 
@@ -270,9 +279,9 @@ async function promptForAccounts(defaults) {
       },
       {
         type: "list",
-        name: "raderAt",
+        name: "radarAt",
         message: "请选择默认签到地点",
-        default: isFirstAccount ? defaults.raderAt : AUTO_RADER,
+        default: isFirstAccount ? defaults.radarAt : AUTO_RADAR,
         choices: LOCATION_CHOICES,
       },
     ]);
@@ -297,20 +306,20 @@ async function promptForAccounts(defaults) {
 
 async function resolveAccounts(cliArgs) {
   const sharedDefaults = {
-    raderAt: cliArgs.raderAt || AUTO_RADER,
+    radarAt: cliArgs.radarAt || AUTO_RADAR,
   };
 
   const singleAccountDefaults = {
     username: process.env.ZJU_USERNAME || "",
     password: process.env.ZJU_PASSWORD || "",
     label: cliArgs.label || "",
-    raderAt: sharedDefaults.raderAt,
+    radarAt: sharedDefaults.radarAt,
   };
 
   const promptDefaults = {
     username: cliArgs.username || process.env.ZJU_USERNAME || "",
     label: cliArgs.label || "",
-    raderAt: sharedDefaults.raderAt,
+    radarAt: sharedDefaults.radarAt,
   };
 
   const accounts = [];
@@ -321,14 +330,14 @@ async function resolveAccounts(cliArgs) {
 
   if (cliArgs.prompt) {
     accounts.push(...(await promptForAccounts(promptDefaults)));
-  } else if (cliArgs.username || cliArgs.password || cliArgs.label || cliArgs.raderAt) {
+  } else if (cliArgs.username || cliArgs.password || cliArgs.label || cliArgs.radarAt) {
     accounts.push(
       normalizeAccount(
         {
           username: cliArgs.username || undefined,
           password: cliArgs.password || undefined,
           label: cliArgs.label || undefined,
-          raderAt: cliArgs.raderAt || undefined,
+          radarAt: cliArgs.radarAt || undefined,
         },
         singleAccountDefaults
       )
@@ -342,7 +351,7 @@ async function resolveAccounts(cliArgs) {
           username: process.env.ZJU_USERNAME,
           password: process.env.ZJU_PASSWORD,
           label: cliArgs.label,
-          raderAt: cliArgs.raderAt,
+          radarAt: cliArgs.radarAt,
         },
         singleAccountDefaults
       )
@@ -356,7 +365,7 @@ function printDryRun(accounts) {
   console.log(`[Auto Sign-in] Resolved ${accounts.length} account(s):`);
   for (const account of accounts) {
     console.log(
-      `- ${account.label} (${account.username}) @ ${account.raderAt} / ${LOCATION_LABELS[account.raderAt] ?? account.raderAt}`
+      `- ${account.label} (${account.username}) @ ${account.radarAt} / ${LOCATION_LABELS[account.radarAt] ?? account.radarAt}`
     );
   }
 }
@@ -370,14 +379,145 @@ function createMessenger(account) {
 
   const notify = (...args) => {
     log(...args);
-    dingTalk(`${prefix} ${stringifyArgs(args)}`);
+    void dingTalk(`${prefix} ${stringifyArgs(args)}`);
   };
 
   const heartbeat = (message) => {
-    dingTalk(`${prefix} ${message}`);
+    void dingTalk(`${prefix} ${message}`);
   };
 
   return { log, notify, heartbeat };
+}
+
+function decimalHaversineDist(lon, lat, lonI, latI, radius) {
+  const deg = Decimal.acos(-1).div(180);
+
+  const lambda = new Decimal(lon).mul(deg);
+  const phi = new Decimal(lat).mul(deg);
+  const lambdaI = new Decimal(lonI).mul(deg);
+  const phiI = new Decimal(latI).mul(deg);
+
+  const dPhi = phi.minus(phiI);
+  const dLambda = lambda.minus(lambdaI);
+
+  const sinDPhiHalf = dPhi.div(2).sin().pow(2);
+  const sinDLambdaHalf = dLambda.div(2).sin().pow(2);
+  const h = sinDPhiHalf.plus(phi.cos().mul(phiI.cos()).mul(sinDLambdaHalf));
+
+  return radius.mul(Decimal.asin(h.sqrt()).mul(2));
+}
+
+function residualsDecimal(lon, lat, points, radius) {
+  return points.map((point) => {
+    const dist = decimalHaversineDist(lon, lat, point.lon, point.lat, radius);
+    return new Decimal(point.d).minus(dist);
+  });
+}
+
+function jacobianDecimal(lon, lat, points, radius) {
+  const eps = new Decimal("1e-12");
+  const base = residualsDecimal(lon, lat, points, radius);
+  const resLon = residualsDecimal(new Decimal(lon).plus(eps), lat, points, radius);
+  const resLat = residualsDecimal(lon, new Decimal(lat).plus(eps), points, radius);
+
+  return points.map((_, index) => {
+    const dLon = resLon[index].minus(base[index]).div(eps).neg();
+    const dLat = resLat[index].minus(base[index]).div(eps).neg();
+    return [dLon, dLat];
+  });
+}
+
+function gaussNewtonDecimal(points, lon0, lat0, radius, log) {
+  let lon = new Decimal(lon0);
+  let lat = new Decimal(lat0);
+
+  for (let iter = 0; iter < 30; iter++) {
+    const residuals = residualsDecimal(lon, lat, points, radius);
+    const jacobian = jacobianDecimal(lon, lat, points, radius);
+
+    const jtj = [
+      [new Decimal(0), new Decimal(0)],
+      [new Decimal(0), new Decimal(0)],
+    ];
+    const jtr = [new Decimal(0), new Decimal(0)];
+
+    for (let index = 0; index < points.length; index++) {
+      const row = jacobian[index];
+      const residual = residuals[index];
+
+      jtj[0][0] = jtj[0][0].plus(row[0].mul(row[0]));
+      jtj[0][1] = jtj[0][1].plus(row[0].mul(row[1]));
+      jtj[1][0] = jtj[1][0].plus(row[1].mul(row[0]));
+      jtj[1][1] = jtj[1][1].plus(row[1].mul(row[1]));
+
+      jtr[0] = jtr[0].plus(row[0].mul(residual));
+      jtr[1] = jtr[1].plus(row[1].mul(residual));
+    }
+
+    const det = jtj[0][0].mul(jtj[1][1]).minus(jtj[0][1].mul(jtj[1][0]));
+    if (det.isZero()) {
+      log?.("[Autosign][SphereFit] Singular matrix, stopping iteration.");
+      break;
+    }
+
+    const inverse = [
+      [jtj[1][1].div(det), jtj[0][1].neg().div(det)],
+      [jtj[1][0].neg().div(det), jtj[0][0].div(det)],
+    ];
+
+    const dLon = inverse[0][0].mul(jtr[0]).plus(inverse[0][1].mul(jtr[1]));
+    const dLat = inverse[1][0].mul(jtr[0]).plus(inverse[1][1].mul(jtr[1]));
+
+    lon = lon.plus(dLon);
+    lat = lat.plus(dLat);
+
+    log?.(`[Autosign][SphereFit][Iter ${iter}] lon = ${lon}, lat = ${lat}`);
+
+    if (dLon.abs().lt("1e-14") && dLat.abs().lt("1e-14")) {
+      break;
+    }
+  }
+
+  return { lon, lat };
+}
+
+function rmsDecimal(lon, lat, points, radius) {
+  const sum = points.reduce((currentSum, point) => {
+    const dModel = decimalHaversineDist(lon, lat, point.lon, point.lat, radius);
+    const diff = new Decimal(point.d).minus(dModel);
+    return currentSum.plus(diff.mul(diff));
+  }, new Decimal(0));
+
+  return sum.div(points.length).sqrt();
+}
+
+function solveSphereLeastSquaresDecimal(rawPoints, log) {
+  const lon0 = rawPoints.reduce((sum, point) => sum + point.lon, 0) / rawPoints.length;
+  const lat0 = rawPoints.reduce((sum, point) => sum + point.lat, 0) / rawPoints.length;
+  const radius = new Decimal("6372999.26");
+  const result = gaussNewtonDecimal(rawPoints, lon0, lat0, radius, log);
+  const rms = rmsDecimal(result.lon, result.lat, rawPoints, radius);
+
+  return {
+    lon: Number(result.lon),
+    lat: Number(result.lat),
+    rms: Number(rms),
+  };
+}
+
+function extractNumberCode(data) {
+  const value =
+    data?.number_code ??
+    data?.numberCode ??
+    data?.student_rollcall?.number_code ??
+    data?.student_rollcalls?.[0]?.number_code ??
+    data?.[0]?.number_code;
+
+  if (value === undefined || value === null || value === "") {
+    return "";
+  }
+
+  return String(value).trim().padStart(4, "0");
 }
 
 async function startAutoSignInstance(account) {
@@ -386,21 +526,21 @@ async function startAutoSignInstance(account) {
   const { log, notify, heartbeat } = createMessenger(account);
   const currentConfig = {
     ...CONFIG,
-    raderAt: account.raderAt,
+    radarAt: account.radarAt,
   };
 
   let reqNum = 0;
   const weAreBruteforcing = new Set();
   const currentBatchingRCs = new Set();
 
-  async function answerRaderRollcall(rid) {
-    async function requestAt(x, y) {
+  async function answerRadarRollcall(rid) {
+    async function requestAt(lon, lat) {
       return courses
         .fetch(`https://courses.zju.edu.cn/api/rollcall/${rid}/answer?api_version=1.1.2`, {
           body: JSON.stringify({
             deviceId: uuidv4(),
-            latitude: y,
-            longitude: x,
+            latitude: lat,
+            longitude: lon,
             speed: null,
             accuracy: 68,
             altitude: null,
@@ -424,75 +564,61 @@ async function startAutoSignInstance(account) {
 
     const radarOutcome = [];
     const configuredRadarXY =
-      currentConfig.raderAt && currentConfig.raderAt !== AUTO_RADER
-        ? RaderInfo[currentConfig.raderAt]
+      currentConfig.radarAt && currentConfig.radarAt !== AUTO_RADAR
+        ? RadarInfo[currentConfig.radarAt]
         : null;
 
     if (configuredRadarXY) {
       const outcome = await requestAt(configuredRadarXY[0], configuredRadarXY[1]);
       if (outcome?.status_name === "on_call_fine") {
-        notify(`Trying configured Rader location: ${currentConfig.raderAt} with outcome:`, outcome);
+        notify(`Configured radar location ${currentConfig.radarAt} succeeded:`, outcome);
         return true;
       }
 
-      log(`Failed to get outcome from configured Rader location: ${currentConfig.raderAt}`, outcome);
+      log(`Configured radar location ${currentConfig.radarAt} failed:`, outcome);
       radarOutcome.push([configuredRadarXY, outcome]);
     }
 
-    for (const [key, value] of Object.entries(RaderInfo)) {
-      log(`Trying Rader location: ${key}`);
+    for (const [key, value] of Object.entries(RadarInfo)) {
+      if (value === configuredRadarXY) {
+        continue;
+      }
+
+      log(`Trying radar location: ${key}`);
       const outcome = await requestAt(value[0], value[1]);
 
       if (outcome?.status_name === "on_call_fine") {
-        notify(`Congradulations! You are on the call at Rader location: ${key}`);
+        notify(`Radar rollcall ${rid} succeeded at location: ${key}`);
         return true;
       }
 
       radarOutcome.push([value, outcome]);
     }
 
-    if (radarOutcome.length > 3) {
-      radarOutcome
-        .filter((value) => value[1]?.error_code === "radar_out_of_rollcall_scope")
-        .map((value) => [value[0][0], value[0][1], value[1].distance]);
-    }
+    const rawPoints = radarOutcome.flatMap(([coord, outcome]) => {
+      const distance = Number(outcome?.distance ?? outcome?.data?.distance ?? outcome?.result?.distance);
+      if (!Number.isFinite(distance) || distance <= 0) {
+        return [];
+      }
+      return [{ lon: coord[0], lat: coord[1], d: distance }];
+    });
 
-    if (!configuredRadarXY) {
+    if (rawPoints.length < 3) {
+      log("[Autosign][SphereFit] Not enough distance points.");
       return false;
     }
 
-    return courses
-      .fetch(`https://courses.zju.edu.cn/api/rollcall/${rid}/answer?api_version=1.1.2`, {
-        body: JSON.stringify({
-          deviceId: uuidv4(),
-          latitude: configuredRadarXY?.[1],
-          longitude: configuredRadarXY?.[0],
-          speed: null,
-          accuracy: 68,
-          altitude: null,
-          altitudeAccuracy: null,
-          heading: null,
-        }),
-        method: "PUT",
-        headers: {
-          "Content-Type": "application/json",
-        },
-      })
-      .then((response) => response.text())
-      .then((payload) => {
-        try {
-          const outcome = JSON.parse(payload);
-          if (outcome.status_name === "on_call_fine") {
-            notify(`Rader Rollcall ${rid} succeeded: on call fine.`);
-          }
-        } catch (error) {
-          log("Rader Rollcall resulted with unknown outcome:", payload);
-          notify(`Rader Rollcall ${rid} resulted with unknown outcome: ${payload}`);
-          return false;
-        }
+    const estimated = solveSphereLeastSquaresDecimal(rawPoints, log);
+    log("[Autosign][SphereFit] Estimated position:", estimated);
 
-        return false;
-      });
+    const finalOutcome = await requestAt(estimated.lon, estimated.lat);
+    if (finalOutcome?.status_name === "on_call_fine") {
+      notify(`Radar rollcall ${rid} succeeded at estimated position: ${estimated.lon}, ${estimated.lat}`);
+      return true;
+    }
+
+    log(`Radar rollcall ${rid} failed at estimated position:`, finalOutcome);
+    return false;
   }
 
   async function answerNumberRollcall(numberCode, rid) {
@@ -507,11 +633,19 @@ async function startAutoSignInstance(account) {
           "Content-Type": "application/json",
         },
       })
+      .then(async (response) => response.status === 200);
+  }
+
+  async function getNumberCode(rid) {
+    return courses
+      .fetch(`https://courses.zju.edu.cn/api/rollcall/${rid}/student_rollcalls`)
       .then(async (response) => {
-        if (response.status !== 200) {
-          return false;
+        try {
+          return await response.json();
+        } catch (error) {
+          log("[Autosign][JSON error]", error);
+          return null;
         }
-        return true;
       });
   }
 
@@ -524,9 +658,20 @@ async function startAutoSignInstance(account) {
 
     const state = new Map();
     state.set("found", false);
+    let foundCode = null;
+
+    const directCode = extractNumberCode(await getNumberCode(rid));
+    if (directCode) {
+      log(`Trying number code from student_rollcalls API: ${directCode}`);
+      const success = await answerNumberRollcall(directCode, rid);
+      if (success) {
+        notify(`Number Rollcall ${rid} succeeded with API code ${directCode}.`);
+        return;
+      }
+      log(`Number code from API did not work for rollcall ${rid}. Falling back to brute force.`);
+    }
 
     const batchSize = 200;
-    let foundCode = null;
 
     for (let start = 0; start <= 9999; start += batchSize) {
       if (state.get("found")) {
@@ -580,9 +725,9 @@ async function startAutoSignInstance(account) {
 
   notify(
     `Logged in as ${account.username}. ${
-      account.raderAt === AUTO_RADER
+      account.radarAt === AUTO_RADAR
         ? "Mode=AUTO (scan all known radar points)"
-        : `Preferred raderAt=${account.raderAt}`
+        : `Preferred radarAt=${account.radarAt}`
     }`
   );
 
@@ -640,17 +785,31 @@ async function startAutoSignInstance(account) {
             `Detected active rollcall #${rollcallId}: ${rollcall.title} @ ${rollcall.course_title} by ${rollcall.created_by_name} (${rollcall.department_name}) [Status: ${rollcall.status}]`
           );
 
+          let handled = false;
+
           if (rollcall.is_radar) {
-            answerRaderRollcall(rollcallId);
+            handled = true;
+            void answerRadarRollcall(rollcallId).catch((error) => {
+              notify(`Radar rollcall ${rollcallId} failed:`, error);
+            });
           }
 
           if (rollcall.is_number) {
+            handled = true;
             if (weAreBruteforcing.has(rollcallId)) {
-              log(`We are already bruteforcing rollcall #${rollcallId}`);
+              log(`We are already handling number rollcall #${rollcallId}`);
             } else {
               weAreBruteforcing.add(rollcallId);
-              batchNumberRollCall(rollcallId);
+              void batchNumberRollCall(rollcallId).catch((error) => {
+                notify(`Number rollcall ${rollcallId} failed:`, error);
+              });
             }
+          }
+
+          if (!handled) {
+            log(`Rollcall #${rollcallId} has an unknown type and cannot be handled yet.`);
+            log("Rollcall details:", rollcall);
+            notify(`Unknown rollcall type for #${rollcallId}. Please inspect logs and consider submitting an issue.`);
           }
         }
       })
