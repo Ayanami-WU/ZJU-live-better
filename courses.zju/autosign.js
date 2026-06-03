@@ -1,156 +1,402 @@
-import { COURSES, ZJUAM } from "login-zju";
 import { v4 as uuidv4 } from "uuid";
-import "dotenv/config";
-import crypto from "crypto";
+import inquirer from "inquirer";
+import fs from "fs/promises";
+import path from "path";
+import "../shared/config.js";
 import dingTalk from "../shared/dingtalk-webhook.js";
 
 const CONFIG = {
   raderAt: "ZJGD1",
-  coldDownTime: 4000, // 4s
+  coldDownTime: 2500,
 };
+
+const AUTO_RADER = "AUTO";
+
 const RaderInfo = {
-  ZJGD1: [120.089136, 30.302331], //东一教学楼
-  ZJGX1: [120.085042, 30.30173], //西教学楼
-  ZJGB1: [120.077135, 30.305142], //段永平教学楼
-  YQ4: [120.122176,30.261555], //玉泉教四
-  YQ1: [120.123853,30.262544], //玉泉教一
-  YQ7: [120.120344,30.263907], //玉泉教七
-  ZJ1: [120.126008,30.192908], //之江校区1
-  HJC1: [120.195939,30.272068], //华家池校区1
-  HJC2: [120.198193,30.270419], //华家池校区2
-  ZJ2: [120.124267,30.19139], //之江校区2 // 之江校区半径都没500米
-  YQSS: [120.124001,30.265735], //虽然大概不会有课在宿舍上但还是放一个点位
-  ZJG4: [120.073427,30.299757], //紫金港大西区
+  ZJGD1: [120.089136, 30.302331], // 东一教学楼
+  ZJGX1: [120.085042, 30.30173], // 西教学楼
+  ZJGB1: [120.077135, 30.305142], // 段永平教学楼
+  YQ4: [120.122176, 30.261555], // 玉泉教四
+  YQ1: [120.123853, 30.262544], // 玉泉教一
+  YQ7: [120.120344, 30.263907], // 玉泉教七
+  ZJ1: [120.126008, 30.192908], // 之江校区1
+  HJC1: [120.195939, 30.272068], // 华家池校区1
+  HJC2: [120.198193, 30.270419], // 华家池校区2
+  ZJ2: [120.124267, 30.19139], // 之江校区2
+  YQSS: [120.124001, 30.265735], // 玉泉宿舍点位
+  ZJG4: [120.073427, 30.299757], // 紫金港大西区
 };
-// 说明: 在这里配置签到地点后，签到会优先【使用配置的地点】尝试
-//      随后会尝试遍历RaderInfo中的所有地点
-//      如果失败了>3次，则会尝试三点定位法
 
-// 成功率：目前【雷达点名】+【已配置了雷达地点】的情况可以100%签到成功
-//        数字点名已测试，已成功，确定远程没有限速，没有calm down，但是目前单线程，可能会有点慢，
-//        三点定位法还没写
+const LOCATION_LABELS = {
+  AUTO: "自动轮询全部已知点位",
+  ZJGD1: "东一教学楼",
+  ZJGX1: "西教学楼",
+  ZJGB1: "段永平教学楼",
+  YQ4: "玉泉教四",
+  YQ1: "玉泉教一",
+  YQ7: "玉泉教七",
+  ZJ1: "之江校区 1",
+  HJC1: "华家池校区 1",
+  HJC2: "华家池校区 2",
+  ZJ2: "之江校区 2",
+  YQSS: "玉泉宿舍点位",
+  ZJG4: "紫金港大西区",
+};
 
-// 顺便一提，经测试，rader_out_of_scope的限制是500米整
-
-const sendBoth=(msg)=>{
-  console.log(msg);
-  dingTalk(msg);
-}
-
-
-const courses = new COURSES(
-  new ZJUAM(process.env.ZJU_USERNAME, process.env.ZJU_PASSWORD)
-);
-
-dingTalk("[Auto Sign-in] Logged in as " + process.env.ZJU_USERNAME);
+const LOCATION_CHOICES = [
+  {
+    name: `${AUTO_RADER} - ${LOCATION_LABELS[AUTO_RADER]}（推荐）`,
+    value: AUTO_RADER,
+  },
+  ...Object.keys(RaderInfo).map((code) => ({
+    name: `${code} - ${LOCATION_LABELS[code] ?? code}`,
+    value: code,
+  })),
+];
 
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
-let req_num = 0;
-
-let we_are_bruteforcing = [];
-
-// if (false)
-(async () => {
-  while (true) {
-    await courses
-      .fetch("https://courses.zju.edu.cn/api/radar/rollcalls")
-      .then((v) => v.text())
-      .then(async (fa) => {
+function stringifyArgs(args) {
+  return args
+    .map((arg) => {
+      if (typeof arg === "object") {
         try {
-          return await JSON.parse(fa)
-        } catch (e) {
-          sendBoth("[-][Auto Sign-in] Something went wrong: " + fa+"\nError: "+e.toString());
+          return JSON.stringify(arg);
+        } catch {
+          return String(arg);
         }
-      })
-  //     .then((v) => v.json())
-      .then(async (v) => {
-        if (v.rollcalls.length == 0) {
-          console.log(`[Auto Sign-in](Req #${++req_num}) No rollcalls found.`);
-        } else {
-          console.log(
-            `[Auto Sign-in](Req #${++req_num}) Found ${v.rollcalls.length} rollcalls. 
-                They are:${v.rollcalls.map(
-              (rc) => `
-                  - ${rc.title} @ ${rc.course_title} by ${rc.created_by_name} (${rc.department_name})`
-            )}`
-          );
-          // console.log(v.rollcalls);
+      }
+      return String(arg);
+    })
+    .join(" ");
+}
 
+function parseCliArgs(argv) {
+  const parsed = {
+    help: false,
+    prompt: false,
+    dryRun: false,
+    username: "",
+    password: "",
+    label: "",
+    raderAt: "",
+    accountsFile: "",
+    envFile: "",
+  };
 
+  for (let index = 0; index < argv.length; index++) {
+    const arg = argv[index];
+    const nextValue = () => {
+      if (index + 1 >= argv.length) {
+        throw new Error(`Missing value for ${arg}`);
+      }
+      index += 1;
+      return argv[index];
+    };
 
-          v.rollcalls.forEach((rollcall) => {
-            /**
-             * It looks like 
-             * 
+    switch (arg) {
+      case "--help":
+      case "-h":
+        parsed.help = true;
+        break;
+      case "--prompt":
+      case "--interactive":
+        parsed.prompt = true;
+        break;
+      case "--dry-run":
+        parsed.dryRun = true;
+        break;
+      case "--username":
+      case "-u":
+        parsed.username = nextValue();
+        break;
+      case "--password":
+      case "-p":
+        parsed.password = nextValue();
+        break;
+      case "--label":
+        parsed.label = nextValue();
+        break;
+      case "--raderAt":
+      case "--rader-at":
+      case "--location":
+        parsed.raderAt = nextValue();
+        break;
+      case "--accounts-file":
+      case "--users-file":
+        parsed.accountsFile = nextValue();
+        break;
+      case "--env":
+        parsed.envFile = nextValue();
+        break;
+      default:
+        throw new Error(`Unknown argument: ${arg}`);
+    }
+  }
+
+  return parsed;
+}
+
+function printHelp() {
+  console.log(`Usage:
+  node courses.zju/autosign.js
+  node courses.zju/autosign.js --username 12345678 --password your_password --raderAt AUTO
+  node courses.zju/autosign.js --prompt
+  node courses.zju/autosign.js --accounts-file ./autosign-users.json
+
+Options:
+  --username, -u       Override ZJU_USERNAME for a single user
+  --password, -p       Override ZJU_PASSWORD for a single user
+  --label              Optional display name used in logs
+  --raderAt            Preferred location code, or AUTO to scan all known points
+  --prompt             Manually enter one or more accounts in the terminal
+  --accounts-file      Read multiple users from a JSON file
+  --dry-run            Print resolved account config and exit
+  --env                Use a custom env file (already supported by shared/config.js)
+  --help, -h           Show this help message
+
+Accounts file example:
+[
   {
-    avatar_big_url: '',
-    class_name: '',
-    course_id: 77997,
-    course_title: '思想道德与法治',
-    created_by: 1835,
-    created_by_name: '单珏慧',
-    department_name: '马克思主义学院',
-    grade_name: '',
-    group_set_id: 0,
-    is_expired: false,
-    is_number: false,
-    is_radar: true,
-    published_at: null,
-    rollcall_id: 171329,
-    rollcall_status: 'in_progress',
-    rollcall_time: '2024-12-12T10:51:43Z',
-    scored: true,
-    source: 'radar',
-    status: 'absent',
-    student_rollcall_id: 0,
-    title: '2024.12.12 18:51',
-    type: 'another'
+    "label": "小明",
+    "username": "2020123456",
+    "password": "password1",
+    "raderAt": "AUTO"
+  },
+  {
+    "label": "室友",
+    "username": "2021123456",
+    "password": "password2",
+    "raderAt": "ZJGD1"
   }
-             */
-            const rollcallId = rollcall.rollcall_id;
-            // console.log(rollcall);
-            if (rollcall.status == "on_call_fine" || rollcall.status == "on_call" || rollcall.status_name == "on_call_fine" || rollcall.status_name == "on_call") {
-              console.log("[Auto Sign-in] Note that #" + rollcallId + " is on call.");
-              ;
-              return;
-            }
-            console.log("[Auto Sign-in] Now answering rollcall #" + rollcallId);
-            if (rollcall.is_radar) {
-              sendBoth(`[Auto Sign-in] Answering new radar rollcall #${rollcallId}: ${rollcall.title} @ ${rollcall.course_title} by ${rollcall.created_by_name} (${rollcall.department_name})`);
-              answerRaderRollcall(RaderInfo[CONFIG.raderAt], rollcallId);
-            }
-            if (rollcall.is_number) {
-              if(we_are_bruteforcing.includes(rollcallId)){
-                console.log("[Auto Sign-in] We are already bruteforcing rollcall #" + rollcallId);
-                return;
-              }
-              we_are_bruteforcing.push(rollcallId);
-              sendBoth(`[Auto Sign-in] Bruteforcing new number rollcall #${rollcallId}: ${rollcall.title} @ ${rollcall.course_title} by ${rollcall.created_by_name} (${rollcall.department_name})`);
-              batchNumberRollCall(rollcallId);
-            }
-          });
-        }
-      }).catch((e) => {
-        console.log(
-          `[Auto Sign-in](Req #${++req_num}) Failed to fetch rollcalls: `,
-          e
-        );
-      });
+]
 
-    await sleep(CONFIG.coldDownTime);
+Tips:
+  1. --password 会留在 shell 历史里，平时更建议用 --prompt。
+  2. 不传参数时，脚本仍然会回退到 .env 里的 ZJU_USERNAME 和 ZJU_PASSWORD。
+  3. raderAt 现在是可选优化项；用 AUTO 时会自动轮询全部已知点位。
+`);
+}
+
+function resolveAccountsFilePath(filePath) {
+  if (path.isAbsolute(filePath)) {
+    return filePath;
   }
-})();
+  return path.resolve(process.cwd(), filePath);
+}
 
+function normalizeAccount(rawAccount, defaults = {}) {
+  if (!rawAccount || typeof rawAccount !== "object") {
+    throw new Error("Account config must be an object.");
+  }
 
-async function answerRaderRollcall(raderXY, rid) {
-  async function _req(x, y) {
-    return await courses
-      .fetch(
-        "https://courses.zju.edu.cn/api/rollcall/" +
-        rid +
-        "/answer?api_version=1.1.2",
+  const usernameValue = rawAccount.username ?? rawAccount.ZJU_USERNAME ?? defaults.username ?? "";
+  const passwordValue = rawAccount.password ?? rawAccount.ZJU_PASSWORD ?? defaults.password ?? "";
+  const labelValue = rawAccount.label ?? rawAccount.name ?? defaults.label ?? "";
+  const raderAtValue =
+    rawAccount.raderAt ??
+    rawAccount.rader_at ??
+    rawAccount.location ??
+    defaults.raderAt ??
+    CONFIG.raderAt;
+
+  const username = String(usernameValue).trim();
+  const password = String(passwordValue);
+  const label = String(labelValue).trim();
+  const normalizedRaderAtInput = String(raderAtValue).trim().toUpperCase();
+  const raderAt = normalizedRaderAtInput || AUTO_RADER;
+
+  if (!username) {
+    throw new Error("Missing username for one of the autosign accounts.");
+  }
+
+  if (!password) {
+    throw new Error(`Missing password for autosign account ${username}.`);
+  }
+
+  if (raderAt !== AUTO_RADER && !RaderInfo[raderAt]) {
+    throw new Error(
+      `Unknown raderAt "${raderAt}" for autosign account ${username}. Available values: ${AUTO_RADER}, ${Object.keys(RaderInfo).join(", ")}`
+    );
+  }
+
+  return {
+    username,
+    password,
+    label: label || username,
+    raderAt,
+  };
+}
+
+async function loadAccountsFromFile(filePath, defaults) {
+  const resolvedPath = resolveAccountsFilePath(filePath);
+  const fileText = await fs.readFile(resolvedPath, "utf8");
+  const parsed = JSON.parse(fileText);
+  const rawAccounts = Array.isArray(parsed) ? parsed : parsed.accounts;
+
+  if (!Array.isArray(rawAccounts)) {
+    throw new Error("Accounts file must be a JSON array or an object with an accounts array.");
+  }
+
+  return rawAccounts.map((account) => normalizeAccount(account, defaults));
+}
+
+async function promptForAccounts(defaults) {
+  const accounts = [];
+  let isFirstAccount = true;
+  let shouldContinue = true;
+
+  while (shouldContinue) {
+    const answers = await inquirer.prompt([
+      {
+        type: "input",
+        name: "username",
+        message: "请输入学号",
+        default: isFirstAccount ? defaults.username : "",
+        validate: (value) => (String(value).trim() ? true : "学号不能为空"),
+      },
+      {
+        type: "password",
+        name: "password",
+        message: "请输入统一认证密码",
+        mask: "*",
+        validate: (value) => (String(value) ? true : "密码不能为空"),
+      },
+      {
+        type: "input",
+        name: "label",
+        message: "给这个账号起一个显示名称（可留空）",
+        default: isFirstAccount ? defaults.label : "",
+      },
+      {
+        type: "list",
+        name: "raderAt",
+        message: "请选择默认签到地点",
+        default: isFirstAccount ? defaults.raderAt : AUTO_RADER,
+        choices: LOCATION_CHOICES,
+      },
+    ]);
+
+    accounts.push(normalizeAccount(answers, defaults));
+
+    const { addMore } = await inquirer.prompt([
+      {
+        type: "confirm",
+        name: "addMore",
+        message: "继续添加下一个账号吗？",
+        default: false,
+      },
+    ]);
+
+    shouldContinue = addMore;
+    isFirstAccount = false;
+  }
+
+  return accounts;
+}
+
+async function resolveAccounts(cliArgs) {
+  const sharedDefaults = {
+    raderAt: cliArgs.raderAt || AUTO_RADER,
+  };
+
+  const singleAccountDefaults = {
+    username: process.env.ZJU_USERNAME || "",
+    password: process.env.ZJU_PASSWORD || "",
+    label: cliArgs.label || "",
+    raderAt: sharedDefaults.raderAt,
+  };
+
+  const promptDefaults = {
+    username: cliArgs.username || process.env.ZJU_USERNAME || "",
+    label: cliArgs.label || "",
+    raderAt: sharedDefaults.raderAt,
+  };
+
+  const accounts = [];
+
+  if (cliArgs.accountsFile) {
+    accounts.push(...(await loadAccountsFromFile(cliArgs.accountsFile, sharedDefaults)));
+  }
+
+  if (cliArgs.prompt) {
+    accounts.push(...(await promptForAccounts(promptDefaults)));
+  } else if (cliArgs.username || cliArgs.password || cliArgs.label || cliArgs.raderAt) {
+    accounts.push(
+      normalizeAccount(
         {
+          username: cliArgs.username || undefined,
+          password: cliArgs.password || undefined,
+          label: cliArgs.label || undefined,
+          raderAt: cliArgs.raderAt || undefined,
+        },
+        singleAccountDefaults
+      )
+    );
+  }
+
+  if (accounts.length === 0) {
+    accounts.push(
+      normalizeAccount(
+        {
+          username: process.env.ZJU_USERNAME,
+          password: process.env.ZJU_PASSWORD,
+          label: cliArgs.label,
+          raderAt: cliArgs.raderAt,
+        },
+        singleAccountDefaults
+      )
+    );
+  }
+
+  return accounts;
+}
+
+function printDryRun(accounts) {
+  console.log(`[Auto Sign-in] Resolved ${accounts.length} account(s):`);
+  for (const account of accounts) {
+    console.log(
+      `- ${account.label} (${account.username}) @ ${account.raderAt} / ${LOCATION_LABELS[account.raderAt] ?? account.raderAt}`
+    );
+  }
+}
+
+function createMessenger(account) {
+  const prefix = `[Auto Sign-in][${account.label}]`;
+
+  const log = (...args) => {
+    console.log(prefix, ...args);
+  };
+
+  const notify = (...args) => {
+    log(...args);
+    dingTalk(`${prefix} ${stringifyArgs(args)}`);
+  };
+
+  const heartbeat = (message) => {
+    dingTalk(`${prefix} ${message}`);
+  };
+
+  return { log, notify, heartbeat };
+}
+
+async function startAutoSignInstance(account) {
+  const { COURSES, ZJUAM } = await import("login-zju");
+  const courses = new COURSES(new ZJUAM(account.username, account.password));
+  const { log, notify, heartbeat } = createMessenger(account);
+  const currentConfig = {
+    ...CONFIG,
+    raderAt: account.raderAt,
+  };
+
+  let reqNum = 0;
+  const weAreBruteforcing = new Set();
+  const currentBatchingRCs = new Set();
+
+  async function answerRaderRollcall(rid) {
+    async function requestAt(x, y) {
+      return courses
+        .fetch(`https://courses.zju.edu.cn/api/rollcall/${rid}/answer?api_version=1.1.2`, {
           body: JSON.stringify({
             deviceId: uuidv4(),
             latitude: y,
@@ -165,76 +411,62 @@ async function answerRaderRollcall(raderXY, rid) {
           headers: {
             "Content-Type": "application/json",
           },
-        }
-      )
-      .then(async (v) => {
-        try {
-          return await v.json()
-        } catch (e) {
-          console.log("[-][Auto Sign-in] Oh no..", e);
-        }
-      })
-  }
-  let rader_outcome = []
-
-  // Step 1: Try the configured Rader location
-  const RaderXY = RaderInfo[CONFIG.raderAt];
-  if (RaderXY) {
-    const outcome = await _req(RaderXY[0], RaderXY[1]);
-    if (outcome.status_name == "on_call_fine") {
-      sendBoth(
-        "[Auto Sign-in] Trying configured Rader location: " +
-        CONFIG.raderAt +
-        " with outcome: ",
-        outcome
-      );
-      return true;
-
-    } else {
-      console.log(
-        "[Auto Sign-in] Failed to get outcome from configured Rader location: " +
-        CONFIG.raderAt,
-        outcome
-      );
+        })
+        .then(async (response) => {
+          try {
+            return await response.json();
+          } catch (error) {
+            log("[-] Failed to parse radar rollcall response.", error);
+            return null;
+          }
+        });
     }
-    rader_outcome.push([RaderXY,outcome]);
-  }
 
-  // Step 2: Try all Rader locations
-  for (const [key, value] of Object.entries(RaderInfo)) {
-    // if (key == CONFIG.raderAt) continue; // Skip the configured Rader location
-    console.log("[Auto Sign-in] Trying Rader location: " + key);
-    // console.log(value[0],value[1]);
-    
-    const outcome = await _req(value[0], value[1]);
-    if (outcome.status_name == "on_call_fine") {
-      sendBoth(
-        "[Auto Sign-in] Congradulations! You are on the call at Rader location: " +
-        key
-      );
-      return true;
+    const radarOutcome = [];
+    const configuredRadarXY =
+      currentConfig.raderAt && currentConfig.raderAt !== AUTO_RADER
+        ? RaderInfo[currentConfig.raderAt]
+        : null;
+
+    if (configuredRadarXY) {
+      const outcome = await requestAt(configuredRadarXY[0], configuredRadarXY[1]);
+      if (outcome?.status_name === "on_call_fine") {
+        notify(`Trying configured Rader location: ${currentConfig.raderAt} with outcome:`, outcome);
+        return true;
+      }
+
+      log(`Failed to get outcome from configured Rader location: ${currentConfig.raderAt}`, outcome);
+      radarOutcome.push([configuredRadarXY, outcome]);
     }
-    rader_outcome.push([value,outcome]);
-  }
 
-  // Step 3: If all Rader locations failed, try three-point triangulation
-  if (rader_outcome.length > 3) {
-    const XYList = rader_outcome.filter(v=>v[1].error_code=="radar_out_of_rollcall_scope").map((v)=>{
-      return [v[0][0], v[0][1],v[1].distance];
-    })
-    // Find the exact distance of the center 
+    for (const [key, value] of Object.entries(RaderInfo)) {
+      log(`Trying Rader location: ${key}`);
+      const outcome = await requestAt(value[0], value[1]);
 
-  }
-  return await courses
-    .fetch(
-      "https://courses.zju.edu.cn/api/rollcall/" +
-      rid +
-      "/answer?api_version=1.1.2",
-      {
+      if (outcome?.status_name === "on_call_fine") {
+        notify(`Congradulations! You are on the call at Rader location: ${key}`);
+        return true;
+      }
+
+      radarOutcome.push([value, outcome]);
+    }
+
+    if (radarOutcome.length > 3) {
+      radarOutcome
+        .filter((value) => value[1]?.error_code === "radar_out_of_rollcall_scope")
+        .map((value) => [value[0][0], value[0][1], value[1].distance]);
+    }
+
+    if (!configuredRadarXY) {
+      return false;
+    }
+
+    return courses
+      .fetch(`https://courses.zju.edu.cn/api/rollcall/${rid}/answer?api_version=1.1.2`, {
         body: JSON.stringify({
           deviceId: uuidv4(),
-          latitude: raderXY[1],
-          longitude: raderXY[0],
+          latitude: configuredRadarXY?.[1],
+          longitude: configuredRadarXY?.[0],
           speed: null,
           accuracy: 68,
           altitude: null,
@@ -245,56 +477,27 @@ async function answerRaderRollcall(raderXY, rid) {
         headers: {
           "Content-Type": "application/json",
         },
-      }
-    )
-    .then((v) => v.text())
-    .then((fa) => {
-      // console.log(
-      //   "[Auto Sign-in] Rader Rollcall answered with an outcome of: ",
-      //   fa
-      // );
-      try {
-        const outcome = JSON.parse(fa);
-        if (outcome.status_name == "on_call_fine") {
-          console.log("[Auto Sign-in] Congradulations! You are on the call.");
-          // dingTalk(`[Auto Sign-in] Rader Rollcall ${rollcallId} succeeded: on call fine.`);
+      })
+      .then((response) => response.text())
+      .then((payload) => {
+        try {
+          const outcome = JSON.parse(payload);
+          if (outcome.status_name === "on_call_fine") {
+            notify(`Rader Rollcall ${rid} succeeded: on call fine.`);
+          }
+        } catch (error) {
+          log("Rader Rollcall resulted with unknown outcome:", payload);
+          notify(`Rader Rollcall ${rid} resulted with unknown outcome: ${payload}`);
+          return false;
         }
-      } catch (e) {
-        console.log(
-          "[Auto Sign-in] Rader Rollcall resulted with unknown outcome: ",
-          fa
-        );
-        sendBoth(`[Auto Sign-in] Rader Rollcall ${rollcallId} resulted with unknown outcome: ${fa}`);
-      }
 
-      /*It should be:
-      {
-    "distance": 304.71523221805245,
-    "id": 4949903,
-    "status": "on_call",
-    "status_name": "on_call_fine"
-}
-    or
+        return false;
+      });
+  }
 
-    {
-    "distance": 609.7890115916947,
-    "error_code": "radar_out_of_rollcall_scope",
-    "id": 4949903,
-    "message": "out of rollcall scope",
-    "status_name": "absent"
-}
-
-*/
-    });
-}
-
-async function answerNumberRollcall(numberCode, rid) {
-  return await courses
-    .fetch(
-      "https://courses.zju.edu.cn/api/rollcall/" +
-      rid +
-      "/answer_number_rollcall",
-      {
+  async function answerNumberRollcall(numberCode, rid) {
+    return courses
+      .fetch(`https://courses.zju.edu.cn/api/rollcall/${rid}/answer_number_rollcall`, {
         body: JSON.stringify({
           deviceId: uuidv4(),
           numberCode,
@@ -302,89 +505,194 @@ async function answerNumberRollcall(numberCode, rid) {
         method: "PUT",
         headers: {
           "Content-Type": "application/json",
-          // "X-Session-Id": courses.session,
         },
-      }
-    )
-    .then(async(vd) => {
-      // console.log(vd.status, vd.statusText);
-      // console.log(await vd.text());
-      /*
-      When fail:
-      400 BAD REQUEST
-      {"error_code":"wrong_number_code","message":"wrong number code","number_code":"6921"}
-      When success:
-      200 OK
-      {"id":5427153,"status":"on_call"}
+      })
+      .then(async (response) => {
+        if (response.status !== 200) {
+          return false;
+        }
+        return true;
+      });
+  }
 
-       */
-
-      
-      if (vd.status != 200 || vd.error_code?.includes("wrong")) {
-        return false;
-      }
-      return true;
-    });
-}
-
-let currentBatchingRCs = [];
-async function batchNumberRollCall(rid) {
-  if (currentBatchingRCs.includes(rid)) return;
-
-  currentBatchingRCs.push(rid);
-
-  const state = new Map();
-  state.set("found", false);
-
-  const batchSize = 200;
-  let foundCode = null;
-
-  for (let start = 0; start <= 9999; start += batchSize) {
-
-    if (state.get("found")) break;
-
-    const end = Math.min(start + batchSize - 1, 9999);
-    const tasks = [];
-
-    for (let ckn = start; ckn <= end; ckn++) {
-      const code = ckn.toString().padStart(4, "0");
-
-      tasks.push(
-        answerNumberRollcall(code, rid).then(success => {
-          if (state.get("found")) return;
-
-          if (success) {
-            foundCode = code;
-            state.set("found", true);
-          }
-        })
-      );
+  async function batchNumberRollCall(rid) {
+    if (currentBatchingRCs.has(rid)) {
+      return;
     }
 
-    await Promise.race([
-      Promise.all(tasks),
-      new Promise(resolve => {
-        const timer = setInterval(() => {
-          if (state.get("found")) {
-            clearInterval(timer);
-            resolve();
-          }
-        }, 20);
+    currentBatchingRCs.add(rid);
+
+    const state = new Map();
+    state.set("found", false);
+
+    const batchSize = 200;
+    let foundCode = null;
+
+    for (let start = 0; start <= 9999; start += batchSize) {
+      if (state.get("found")) {
+        break;
+      }
+
+      const end = Math.min(start + batchSize - 1, 9999);
+      const tasks = [];
+
+      for (let currentNumber = start; currentNumber <= end; currentNumber++) {
+        const code = currentNumber.toString().padStart(4, "0");
+
+        tasks.push(
+          answerNumberRollcall(code, rid).then((success) => {
+            if (state.get("found")) {
+              return;
+            }
+
+            if (success) {
+              foundCode = code;
+              state.set("found", true);
+            }
+          })
+        );
+      }
+
+      await Promise.race([
+        Promise.all(tasks),
+        new Promise((resolve) => {
+          const timer = setInterval(() => {
+            if (state.get("found")) {
+              clearInterval(timer);
+              resolve();
+            }
+          }, 20);
+        }),
+      ]);
+
+      if (state.get("found")) {
+        break;
+      }
+    }
+
+    if (foundCode) {
+      notify(`Number Rollcall ${rid} succeeded: found code ${foundCode}.`);
+      return;
+    }
+
+    notify(`Number Rollcall ${rid} failed to find valid code.`);
+  }
+
+  notify(
+    `Logged in as ${account.username}. ${
+      account.raderAt === AUTO_RADER
+        ? "Mode=AUTO (scan all known radar points)"
+        : `Preferred raderAt=${account.raderAt}`
+    }`
+  );
+
+  while (true) {
+    const currentReq = ++reqNum;
+
+    await courses
+      .fetch("https://courses.zju.edu.cn/api/radar/rollcalls")
+      .then((response) => response.text())
+      .then(async (payload) => {
+        try {
+          return await JSON.parse(payload);
+        } catch (error) {
+          notify(`[-] Something went wrong: ${payload}\nError: ${error}`);
+          return null;
+        }
       })
-    ]);
+      .then(async (result) => {
+        if (!result) {
+          return;
+        }
 
-    if (state.get("found")) break;
-  }
+        const rollcalls = Array.isArray(result.rollcalls) ? result.rollcalls : [];
 
-  if (foundCode) {
-    sendBoth(`[Auto Sign-in] Number Rollcall ${rid} succeeded: found code ${foundCode}.`);
-  }
-  else {
-    sendBoth(`[Auto Sign-in] Number Rollcall ${rid} failed to find valid code.`);
+        if (rollcalls.length === 0) {
+          log(`(Req #${currentReq}) No rollcalls found.`);
+          if (currentReq % 100 === 0) {
+            heartbeat(`(Req #${currentReq}) No rollcalls found. (Heartbeat at ${new Date().toLocaleTimeString()})`);
+          }
+          return;
+        }
+
+        log(
+          `(Req #${currentReq}) Found ${rollcalls.length} rollcalls.\nThey are:${rollcalls.map(
+            (rollcall) =>
+              `\n- ${rollcall.title} @ ${rollcall.course_title} by ${rollcall.created_by_name} (${rollcall.department_name})`
+          )}`
+        );
+
+        for (const rollcall of rollcalls) {
+          const rollcallId = rollcall.rollcall_id;
+
+          if (
+            rollcall.status === "on_call_fine" ||
+            rollcall.status === "on_call" ||
+            rollcall.status_name === "on_call_fine" ||
+            rollcall.status_name === "on_call"
+          ) {
+            log(`Note that #${rollcallId} is on call.`);
+            continue;
+          }
+
+          log(`Now answering rollcall #${rollcallId}`);
+          notify(
+            `Detected active rollcall #${rollcallId}: ${rollcall.title} @ ${rollcall.course_title} by ${rollcall.created_by_name} (${rollcall.department_name}) [Status: ${rollcall.status}]`
+          );
+
+          if (rollcall.is_radar) {
+            answerRaderRollcall(rollcallId);
+          }
+
+          if (rollcall.is_number) {
+            if (weAreBruteforcing.has(rollcallId)) {
+              log(`We are already bruteforcing rollcall #${rollcallId}`);
+            } else {
+              weAreBruteforcing.add(rollcallId);
+              batchNumberRollCall(rollcallId);
+            }
+          }
+        }
+      })
+      .catch((error) => {
+        log(`(Req #${currentReq}) Failed to fetch rollcalls:`, error);
+      });
+
+    await sleep(currentConfig.coldDownTime);
   }
 }
 
+async function main() {
+  const cliArgs = parseCliArgs(process.argv.slice(2));
 
-// answerRaderRollcall(RaderInfo[CONFIG.raderAt], 171632);
+  if (cliArgs.help) {
+    printHelp();
+    return;
+  }
 
-// fetch()
+  const accounts = await resolveAccounts(cliArgs);
+
+  if (cliArgs.dryRun) {
+    printDryRun(accounts);
+    return;
+  }
+
+  console.log(
+    `[Auto Sign-in] Starting ${accounts.length} account instance(s): ${accounts
+      .map((account) => `${account.label}(${account.username})`)
+      .join(", ")}`
+  );
+
+  await Promise.all(
+    accounts.map((account) =>
+      startAutoSignInstance(account).catch((error) => {
+        console.error(`[Auto Sign-in][${account.label}] Fatal error:`, error);
+      })
+    )
+  );
+}
+
+main().catch((error) => {
+  console.error("[Auto Sign-in] Failed to start:", error);
+  process.exitCode = 1;
+});
