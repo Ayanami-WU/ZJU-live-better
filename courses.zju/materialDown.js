@@ -6,7 +6,7 @@ import cliProgress from "cli-progress";
 import fs from "fs";
 import path from "path";
 
-import "dotenv/config";
+import "../shared/config.js";
 
 const courses = new COURSES(
   new ZJUAM(process.env.ZJU_USERNAME, process.env.ZJU_PASSWORD)

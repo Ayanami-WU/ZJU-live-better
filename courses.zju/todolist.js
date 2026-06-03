@@ -3,7 +3,7 @@
 import inquirer from "inquirer";
 import { COURSES, ZJUAM } from "login-zju";
 
-import "dotenv/config";
+import "../shared/config.js";
 
 const courses = new COURSES(
   new ZJUAM(process.env.ZJU_USERNAME, process.env.ZJU_PASSWORD)

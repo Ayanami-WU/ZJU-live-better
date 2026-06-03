@@ -74,10 +74,16 @@ web_modules/
 
 # dotenv environment variable files
 .env
+.env.*
+!.env.example
 .env.development.local
 .env.test.local
 .env.production.local
 .env.local
+
+# Local machine files
+.DS_Store
+.idea/
 
 # parcel-bundler cache (https://parceljs.org/)
 .cache
@@ -134,3 +140,15 @@ dist
 .yarn/build-state.yml
 .yarn/install-state.gz
 .pnp.*
+
+
+
+
+
+
+#####
+
+debug/
+
+# Generated quiz answer HTML files (courses.zju/quizanswer.js)
+courses.zju/QA*.html

@@ -6,8 +6,11 @@ import inquirer from "inquirer";
 import { COURSES, ZJUAM } from "login-zju";
 import * as fs from "fs";
 import * as path from "path";
+import { fileURLToPath } from "url";
 
-import "dotenv/config";
+import "../shared/config.js";
+
+const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
 const courses = new COURSES(
   new ZJUAM(process.env.ZJU_USERNAME, process.env.ZJU_PASSWORD)

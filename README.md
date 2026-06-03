@@ -12,4 +12,4 @@ A collection of useful scripts helping you live better in ZJU.
 
 ## 反馈
 
-反馈使用问题可以添加QQ群：1042563780
+反馈使用问题可以添加QQ群：10425637

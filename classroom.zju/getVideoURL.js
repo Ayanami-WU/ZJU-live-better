@@ -15,7 +15,7 @@ VIDEO_OPENER="D:\\Developing_Environment\\Programs\\PotPlayer\\PotPlayerMini64.e
 import inquirer from "inquirer";
 import { CLASSROOM, ZJUAM } from "login-zju";
 
-import "dotenv/config";
+import "../shared/config.js";
 let opener = process.env.VIDEO_OPENER??false;
 import { spawn } from "child_process";
 
@@ -118,7 +118,7 @@ async function ChooseVideo(choices) {
           if (confirm.confirm) {
             // const { spawn } = require("child_process");
             if(!opener){
-              console.log("VIDEO_OPENER is not set in .env file!");
+              console.log("VIDEO_OPENER is not set in the selected env file!");
               opener = await inquirer.prompt({
                 type: "input",
                 name: "path",

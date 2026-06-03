@@ -13,7 +13,7 @@ CLASSROOM_DOWNLOAD_PATH=your download path
 import inquirer from "inquirer";
 import { CLASSROOM, ZJUAM } from "login-zju";
 
-import "dotenv/config";
+import "../shared/config.js";
 
 
 
