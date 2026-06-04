@@ -49,6 +49,8 @@ cp deploy/env/autosign.env.example deploy/env/autosign.env
 docker compose up -d --build
 ```
 
+ARM64 或弱网络设备如果在拉取 `node:22-bookworm-slim` 时长时间卡住，当前 Docker 配置默认改用更小的 `node:22-alpine`。也可以先执行 `docker pull node:22-alpine`，再重新 `docker compose up -d --build`。
+
 更多用法见 [Docker 部署文档](docs/docker.md)。
 
 ## 反馈

@@ -2,6 +2,8 @@ services:
   autosign:
     build:
       context: .
+      args:
+        NODE_IMAGE: ${LIVE_BETTER_NODE_IMAGE:-node:22-alpine}
     image: ${LIVE_BETTER_IMAGE:-zju-live-better:local}
     init: true
     restart: unless-stopped

@@ -1,6 +1,6 @@
-# syntax=docker/dockerfile:1
+ARG NODE_IMAGE=node:22-alpine
 
-FROM node:22-bookworm-slim AS deps
+FROM ${NODE_IMAGE} AS deps
 
 WORKDIR /app
 ENV NODE_ENV=production
@@ -10,7 +10,7 @@ RUN corepack enable \
     && pnpm install --prod --frozen-lockfile \
     && pnpm store prune
 
-FROM node:22-bookworm-slim AS runtime
+FROM ${NODE_IMAGE} AS runtime
 
 WORKDIR /app
 ENV NODE_ENV=production
