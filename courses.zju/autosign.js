@@ -530,7 +530,7 @@ async function startAutoSignInstance(account) {
   };
 
   let reqNum = 0;
-  const weAreBruteforcing = new Set();
+  const notifiedNumberRollcalls = new Set();
   const currentBatchingRCs = new Set();
 
   async function answerRadarRollcall(rid) {
@@ -796,13 +796,10 @@ async function startAutoSignInstance(account) {
 
           if (rollcall.is_number) {
             handled = true;
-            if (weAreBruteforcing.has(rollcallId)) {
-              log(`We are already handling number rollcall #${rollcallId}`);
-            } else {
-              weAreBruteforcing.add(rollcallId);
-              void batchNumberRollCall(rollcallId).catch((error) => {
-                notify(`Number rollcall ${rollcallId} failed:`, error);
-              });
+            if (!notifiedNumberRollcalls.has(rollcallId)) {
+              notifiedNumberRollcalls.add(rollcallId);
+              // Automatic attempts can exhaust the server's attempt limit.
+              notify(`New number rollcall #${rollcallId}: ${rollcall.title} @ ${rollcall.course_title}. Please enter the code manually; automatic attempts are disabled.`);
             }
           }
 

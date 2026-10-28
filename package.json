@@ -2,7 +2,9 @@
   "name": "zju-live-better",
   "version": "1.0.0",
   "main": "index.js",
-  "scripts": {},
+  "scripts": {
+    "test:sync": "node --experimental-vm-modules --test tests/upstream-sync.test.js"
+  },
   "bin":{
     "zlb": "./shared/cli-entry.js"
   },
@@ -19,7 +21,7 @@
     "dotenv": "^16.6.1",
     "express": "^4.21.2",
     "inquirer": "^12.11.1",
-    "login-zju": "^1.0.8",
+    "login-zju": "^1.0.9",
     "uuid": "^11.1.0"
   },
   "description": "",

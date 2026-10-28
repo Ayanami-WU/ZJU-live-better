@@ -116,3 +116,24 @@ LIVE_BETTER_SCRIPT=classroom.zju/generateCourseMd.js
 ```
 
 课堂下载路径默认是 `/data/downloads`，会落到本地 `./data/downloads`。
+
+
+## 7. 运行成绩监控
+
+在对应的 env 文件中配置：
+
+```env
+LIVE_BETTER_SCRIPT=zdbk.zju/gradeMonitor.js
+LIVE_BETTER_ARGS=monitor
+GRADE_STATE_PATH=/data/grades.json
+```
+
+然后使用同样的 `docker compose up -d --build` 启动。成绩基线保存在本地 `./data/grades.json`，容器重建后仍会保留。不同账号或实例应分别指定状态文件路径，避免共用基线。
+
+只检查一次成绩：
+
+```bash
+docker compose run --rm -e LIVE_BETTER_SCRIPT=zdbk.zju/gradeMonitor.js -e LIVE_BETTER_ARGS=check -e GRADE_STATE_PATH=/data/grades.json autosign
+```
+
+数字签到现在只发送提醒，不再自动尝试数字码，以免耗尽服务器允许的尝试次数；多用户运行和空轮询心跳保持可用。
