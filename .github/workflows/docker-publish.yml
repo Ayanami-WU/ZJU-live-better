@@ -91,10 +91,17 @@ jobs:
           IMAGE: ${{ steps.image.outputs.name }}@${{ steps.build.outputs.digest }}
         shell: bash
         run: |
+          smoke_config=$(mktemp)
+          trap 'rm -f "$smoke_config"' EXIT
+          printf '%s\n' '{"users":[{"username":"offline-a","password":"dummy-a"},{"username":"offline-b","password":"dummy-b"}],"dingtalk":{"enabled":false}}' > "$smoke_config"
+          chmod 644 "$smoke_config"
           for platform in linux/amd64 linux/arm64; do
             docker run --rm --platform "$platform" --network none "$IMAGE" --help
             docker run --rm --platform "$platform" --network none "$IMAGE" \
               --username offline-smoke --password dummy-smoke --dry-run
+            docker run --rm --platform "$platform" --network none \
+              --mount "type=bind,source=$smoke_config,target=/data/config.json,readonly" \
+              "$IMAGE" --dry-run | grep -F 'Resolved 2 account(s)'
             docker run --rm --platform "$platform" --network none \
               --entrypoint node "$IMAGE" zdbk.zju/gradeMonitor.js --help
           done
