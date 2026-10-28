@@ -2,7 +2,7 @@ import { v4 as uuidv4 } from "uuid";
 import inquirer from "inquirer";
 import fs from "fs/promises";
 import path from "path";
-import "../shared/config.js";
+import { config } from "../shared/config.js";
 import dingTalk from "../shared/dingtalk-webhook.js";
 import Decimal from "decimal.js";
 
@@ -10,7 +10,8 @@ Decimal.set({ precision: 100 });
 
 const CONFIG = {
   radarAt: "ZJGD1",
-  coldDownTime: 4000,
+  coldDownTime: config.autosign?.pollIntervalMs ?? 4000,
+  heartbeatEvery: config.autosign?.heartbeatEvery ?? 100,
 };
 
 const AUTO_RADAR = "AUTO";
@@ -134,6 +135,9 @@ function parseCliArgs(argv) {
       case "--env":
         parsed.envFile = nextValue();
         break;
+      case "--config":
+        nextValue(); // Loaded once by shared/config.js before the script starts.
+        break;
       default:
         throw new Error(`Unknown argument: ${arg}`);
     }
@@ -158,6 +162,7 @@ Options:
   --prompt             Manually enter one or more accounts in the terminal
   --accounts-file      Read multiple users from a JSON file
   --dry-run            Print resolved account config and exit
+  --config             Load users and shared settings from one JSON file
   --env                Use a custom env file (already supported by shared/config.js)
   --help, -h           Show this help message
 
@@ -306,7 +311,7 @@ async function promptForAccounts(defaults) {
 
 async function resolveAccounts(cliArgs) {
   const sharedDefaults = {
-    radarAt: cliArgs.radarAt || AUTO_RADAR,
+    radarAt: cliArgs.radarAt || config.autosign?.radarAt || AUTO_RADAR,
   };
 
   const singleAccountDefaults = {
@@ -326,11 +331,13 @@ async function resolveAccounts(cliArgs) {
 
   if (cliArgs.accountsFile) {
     accounts.push(...(await loadAccountsFromFile(cliArgs.accountsFile, sharedDefaults)));
+  } else if (!cliArgs.prompt && !cliArgs.username && !cliArgs.password && !cliArgs.label && config.users?.length) {
+    accounts.push(...config.users.map((account) => normalizeAccount(account, sharedDefaults)));
   }
 
   if (cliArgs.prompt) {
     accounts.push(...(await promptForAccounts(promptDefaults)));
-  } else if (cliArgs.username || cliArgs.password || cliArgs.label || cliArgs.radarAt) {
+  } else if (cliArgs.username || cliArgs.password || cliArgs.label || (cliArgs.radarAt && accounts.length === 0)) {
     accounts.push(
       normalizeAccount(
         {
@@ -358,6 +365,9 @@ async function resolveAccounts(cliArgs) {
     );
   }
 
+  if (cliArgs.radarAt) {
+    return accounts.map((account) => normalizeAccount({ ...account, radarAt: cliArgs.radarAt }));
+  }
   return accounts;
 }
 
@@ -754,7 +764,7 @@ async function startAutoSignInstance(account) {
 
         if (rollcalls.length === 0) {
           log(`(Req #${currentReq}) No rollcalls found.`);
-          if (currentReq % 100 === 0) {
+          if (currentConfig.heartbeatEvery > 0 && currentReq % currentConfig.heartbeatEvery === 0) {
             heartbeat(`(Req #${currentReq}) No rollcalls found. (Heartbeat at ${new Date().toLocaleTimeString()})`);
           }
           return;

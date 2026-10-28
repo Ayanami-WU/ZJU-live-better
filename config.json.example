@@ -1,0 +1,28 @@
+{
+  "users": [
+    { "label": "账号一", "username": "your_zju_username", "password": "your_zju_password" },
+    { "label": "账号二", "username": "another_zju_username", "password": "another_zju_password", "radarAt": "AUTO" }
+  ],
+  "autosign": {
+    "radarAt": "AUTO",
+    "pollIntervalMs": 4000,
+    "heartbeatEvery": 100
+  },
+  "dingtalk": {
+    "enabled": false,
+    "webhook": "",
+    "secret": ""
+  },
+  "gradeMonitor": {
+    "statePath": "/data/grades.json",
+    "startHour": 8,
+    "endHour": 24,
+    "intervalSeconds": 3600,
+    "requestTimeoutMs": 20000,
+    "notifyInitial": false,
+    "checkEvaluation": true
+  },
+  "classroom": {
+    "downloadPath": "/data/downloads"
+  }
+}

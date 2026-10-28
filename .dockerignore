@@ -22,3 +22,9 @@ coverage
 
 Dockerfile
 docker-compose*.yml
+
+# Never copy local unified credentials into an image.
+config.json
+config.*.json
+tmp
+tools

@@ -3,7 +3,7 @@
   "version": "1.0.0",
   "main": "index.js",
   "scripts": {
-    "test:sync": "node --experimental-vm-modules --test tests/upstream-sync.test.js"
+    "test:sync": "node --experimental-vm-modules --test tests/*.test.js"
   },
   "bin":{
     "zlb": "./shared/cli-entry.js"

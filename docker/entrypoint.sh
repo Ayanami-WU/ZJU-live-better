@@ -1,6 +1,11 @@
 #!/bin/sh
 set -eu
 
+# Keep env-only deployments working; auto-load a mounted unified config when present.
+if [ -z "${LIVE_BETTER_CONFIG_FILE:-}" ] && [ -f /data/config.json ]; then
+  export LIVE_BETTER_CONFIG_FILE=/data/config.json
+fi
+
 if [ -n "${LIVE_BETTER_SCRIPT:-}" ] || [ -n "${LIVE_BETTER_ARGS:-}" ]; then
   set -- "${LIVE_BETTER_SCRIPT:-courses.zju/autosign.js}"
   if [ -n "${LIVE_BETTER_ARGS:-}" ]; then

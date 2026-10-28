@@ -46,7 +46,31 @@ A collection of useful scripts helping you live better in ZJU.
 | `gradeMonitor check` | 检查一次正式课程成绩并记录变化 |
 | `gradeMonitor monitor` | 定时监控正式成绩，变化时发送钉钉通知（具体使用细节查看脚本开头注释） |
 
+## 统一配置
+
+可以沿用 `users` 数组的 JSON 配置结构，将浙大账号、钉钉通知、轮询和心跳设置集中到一个文件：
+
+```bash
+cp config.json.example config.json
+node courses.zju/autosign.js --config ./config.json --dry-run
+node courses.zju/autosign.js --config ./config.json
+```
+
+请填写浙大统一身份认证账号。配置格式示例和优先级见 [Docker 与统一配置说明](docs/docker.md#统一配置文件)。现有 `.env`、`--env`、`--accounts-file` 和交互输入继续可用。
+
 ## Docker
+
+直接使用 GHCR 镜像部署，无需在服务器上构建：
+
+```bash
+mkdir -p data
+cp config.json.example data/config.json
+# 编辑 data/config.json 填入账号；Linux 上还需确保目录可由容器的 UID 1000 读写。
+docker compose -f compose.ghcr.yaml pull
+docker compose -f compose.ghcr.yaml up -d
+```
+
+镜像为 `ghcr.io/ayanami-wu/zju-live-better:feat-dockerized`，支持 `linux/amd64` 和 `linux/arm64`。`compose.ghcr.yaml` 只拉取镜像；下面的原有 Compose 命令仍用于本地源码构建。
 
 也可以用 Docker / Docker Compose 部署：
 

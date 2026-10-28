@@ -79,10 +79,11 @@ async function loadScript(relative, options = {}) {
   return { namespace: module.namespace, output, context, process: fakeProcess };
 }
 
-async function autosignHarness(payload, pollLimit) {
+async function autosignHarness(payload, pollLimit, options = {}) {
   const instances = [];
   const notifications = [];
   const requests = [];
+  const delays = [];
   class ZJUAM {
     constructor(username, password) { this.username = username; this.password = password; }
   }
@@ -104,26 +105,27 @@ async function autosignHarness(payload, pollLimit) {
         { username: "student-a", password: "fake-secret-a", label: "A" },
         { username: "student-b", password: "fake-secret-b", label: "B", raderAt: "YQ4" },
       ]) } },
-      "../shared/config.js": {},
+      "../shared/config.js": { config: options.config || {} },
       "../shared/dingtalk-webhook.js": { default: async (message) => { notifications.push(message); } },
       "decimal.js": { default: { set() {} } }, "login-zju": { COURSES, ZJUAM },
     },
     globals: {
-      setTimeout(callback) {
+      setTimeout(callback, delay) {
+        delays.push(delay);
         if (instances.length === 2 && instances.every((instance) => instance.polls >= pollLimit)) throw stop;
         queueMicrotask(callback);
       },
     },
   });
-  const accounts = await script.namespace.resolveAccounts(script.namespace.parseCliArgs(["--accounts-file", "dummy-accounts.json"]));
+  const accounts = await script.namespace.resolveAccounts(script.namespace.parseCliArgs(options.argv || ["--accounts-file", "dummy-accounts.json"]));
   assert.deepEqual(plain(accounts).map(({ username, label, radarAt }) => ({ username, label, radarAt })), [
-    { username: "student-a", label: "A", radarAt: "AUTO" },
-    { username: "student-b", label: "B", radarAt: "YQ4" },
+    { username: "student-a", label: "A", radarAt: options.radarAt || "AUTO" },
+    { username: "student-b", label: "B", radarAt: options.radarAt || "YQ4" },
   ]);
   script.namespace.printDryRun(accounts);
   assert.doesNotMatch(script.output.join("\n"), /fake-secret/);
   await Promise.all(accounts.map((account) => assert.rejects(script.namespace.startAutoSignInstance(account), (error) => error === stop)));
-  return { instances, notifications, requests, ...script };
+  return { instances, notifications, requests, delays, ...script };
 }
 
 test("multiple accounts keep separate polling counters and heartbeat messages", async () => {
@@ -211,7 +213,7 @@ test("grade notifications retain saved state on failure and retry the change", a
     entrypoint: "main()\n", exports: ["buildConfig", "runCheck"],
     process: { env: { ZJU_USERNAME: "dummy", ZJU_PASSWORD: "fake", GRADE_CHECK_EVALUATION: "false", GRADE_STATE_PATH: statePath } },
     mocks: {
-      "dotenv/config": {}, "../shared/config.js": {}, "node:fs": { default: memoryFs },
+      "dotenv/config": {}, "../shared/config.js": { config: {} }, "node:fs": { default: memoryFs },
       "login-zju": { ZJUAM: class {}, ZDBK: class {
         async fetch() { return { ok: true, json: async () => ({ items: [{ xkkh: "course-1", kcmc: "Test course", cj: currentScore, bkcj: "", jd: "3.5", xf: "2" }] }) }; }
       } },
@@ -304,7 +306,7 @@ test("ALT mock workflow stops after an empty pending-course list", async () => {
   const { namespace, output } = await loadScript("alt.zju/autojudge.js", {
     entrypoint: "main();", exports: ["main"],
     mocks: {
-      "../shared/config.js": {},
+      "../shared/config.js": { config: {} },
       chalk: { default: { red: color, blue: color, bold: color } },
       inquirer: { default: { prompt: async () => ({ mode: "interactive" }) } },
       "login-zju": {
@@ -324,4 +326,35 @@ test("ALT mock workflow stops after an empty pending-course list", async () => {
   assert.equal(requests[0].method, "POST");
   assert.deepEqual(requests[0].body, { pageNum: 0, pageSize: 20 });
   assert.ok(output.some((line) => line.includes("找到 0 门待评教课程")));
+});
+
+
+test("unified users support global location, custom polling and disabled heartbeat", async () => {
+  const config = {
+    users: [
+      { username: "student-a", password: "fake-secret-a", label: "A" },
+      { username: "student-b", password: "fake-secret-b", label: "B" },
+    ],
+    autosign: { radarAt: "YQ4", pollIntervalMs: 17, heartbeatEvery: 0 },
+  };
+  const { notifications, delays, namespace } = await autosignHarness({ rollcalls: [] }, 2, {
+    config, argv: ["--config", "config.json"], radarAt: "YQ4",
+  });
+  assert.equal(notifications.filter((message) => message.includes("Heartbeat at")).length, 0);
+  assert.ok(delays.every((delay) => delay === 17));
+  const overridden = await namespace.resolveAccounts(namespace.parseCliArgs(["--config", "config.json", "--radarAt", "ZJGD1"]));
+  assert.equal(overridden.length, 2);
+  assert.ok(overridden.every((account) => account.radarAt === "ZJGD1"));
+  const legacy = await namespace.resolveAccounts(namespace.parseCliArgs(["--accounts-file", "old-accounts.json", "--radarAt", "ZJGD1"]));
+  assert.equal(legacy.length, 2);
+  assert.ok(legacy.every((account) => account.radarAt === "ZJGD1"));
+});
+
+test("unified heartbeat cadence remains independent for both accounts", async () => {
+  const { notifications } = await autosignHarness({ rollcalls: [] }, 2, {
+    config: { autosign: { heartbeatEvery: 2 } },
+  });
+  const heartbeats = notifications.filter((message) => message.includes("Heartbeat at"));
+  assert.equal(heartbeats.length, 2);
+  assert.ok(heartbeats.every((message) => message.includes("Req #2")));
 });

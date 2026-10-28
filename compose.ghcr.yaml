@@ -1,0 +1,13 @@
+services:
+  autosign:
+    image: ${LIVE_BETTER_IMAGE:-ghcr.io/ayanami-wu/zju-live-better:feat-dockerized}
+    init: true
+    restart: unless-stopped
+    environment:
+      TZ: ${TZ:-Asia/Shanghai}
+      NODE_ENV: production
+      LIVE_BETTER_CONFIG_FILE: /data/config.json
+      LIVE_BETTER_SCRIPT: ${LIVE_BETTER_SCRIPT:-}
+      LIVE_BETTER_ARGS: ${LIVE_BETTER_ARGS:-}
+    volumes:
+      - ./data:/data
